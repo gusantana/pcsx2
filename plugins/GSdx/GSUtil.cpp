@@ -23,7 +23,7 @@
 #include "GSUtil.h"
 
 #ifdef _WIN32
-#include "GSDeviceDX.h"
+#include "Renderers/DX11/GSDevice11.h"
 #include <VersionHelpers.h>
 #include "svnrev.h"
 #else
@@ -255,7 +255,7 @@ CRCHackLevel GSUtil::GetRecommendedCRCHackLevel(GSRendererType type)
 #define OCL_PROGRAM_VERSION 3
 
 #ifdef ENABLE_OPENCL
-void GSUtil::GetDeviceDescs(list<OCLDeviceDesc>& dl)
+void GSUtil::GetDeviceDescs(std::list<OCLDeviceDesc>& dl)
 {
 	dl.clear();
 
@@ -275,7 +275,7 @@ void GSUtil::GetDeviceDescs(list<OCLDeviceDesc>& dl)
 
 			for(auto& device : ds)
 			{
-				string type;
+				std::string type;
 
 				switch(device.getInfo<CL_DEVICE_TYPE>())
 				{
@@ -317,13 +317,13 @@ void GSUtil::GetDeviceDescs(list<OCLDeviceDesc>& dl)
 	}
 }
 
-string GSUtil::GetDeviceUniqueName(cl::Device& device)
+std::string GSUtil::GetDeviceUniqueName(cl::Device& device)
 {
 	std::string vendor = device.getInfo<CL_DEVICE_VENDOR>();
 	std::string name = device.getInfo<CL_DEVICE_NAME>();
 	std::string version = device.getInfo<CL_DEVICE_OPENCL_C_VERSION>();
 
-	string type;
+	std::string type;
 
 	switch(device.getInfo<CL_DEVICE_TYPE>())
 	{
@@ -341,9 +341,9 @@ string GSUtil::GetDeviceUniqueName(cl::Device& device)
 
 bool GSUtil::CheckDirectX()
 {
-	if (GSDeviceDX::LoadD3DCompiler())
+	if (GSDevice11::LoadD3DCompiler())
 	{
-		GSDeviceDX::FreeD3DCompiler();
+		GSDevice11::FreeD3DCompiler();
 		return true;
 	}
 
@@ -426,12 +426,10 @@ GSRendererType GSUtil::GetBestRenderer()
 				// Check for Nvidia VendorID. Latest OpenGL features need at least DX11 level GPU
 				if (desc.VendorId == 0x10DE && level >= D3D_FEATURE_LEVEL_11_0)
 					return GSRendererType::OGL_HW;
-				if (level >= D3D_FEATURE_LEVEL_10_0)
-					return GSRendererType::DX1011_HW;
 			}
 		}
 	}
-	return GSRendererType::DX9_HW;
+	return GSRendererType::DX1011_HW;
 }
 
 #endif

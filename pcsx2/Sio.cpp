@@ -16,8 +16,16 @@
 #include "PrecompiledHeader.h"
 #include "IopCommon.h"
 
+#include "Common.h"
+#include "ConsoleLogger.h"
 #include "Sio.h"
 #include "sio_internal.h"
+
+#ifndef DISABLE_RECORDING
+#	include "Recording/InputRecording.h"
+#	include "Recording/PadData.h"
+#	include "Recording/RecordingInputManager.h"
+#endif
 
 _sio sio;
 _mcd mcds[2][4];
@@ -26,13 +34,15 @@ _mcd *mcd;
 SIO_MODE siomode = SIO_START;
 static void sioWrite8inl(u8 data);
 #define SIO_WRITE void inline
+#define SIO_FORCEINLINE __fi
 
 // Magic psx values from nocash info
 static const u8 memcard_psx[] = {0x5A, 0x5D, 0x5C, 0x5D, 0x04, 0x00, 0x00, 0x80};
 
 // Memory Card Specs for standard Sony 8mb carts:
 //    Flags (magic sio '+' thingie!), Sector size, eraseBlockSize (in pages), card size (in pages), xor checksum (superblock?), terminator (unused?).
-static const mc_command_0x26_tag mc_sizeinfo_8mb= {'+', 512, 16, 0x4000, 0x52, 0x5A};
+// FIXME variable commented out since it's not used atm.
+// static const mc_command_0x26_tag mc_sizeinfo_8mb= {'+', 512, 16, 0x4000, 0x52, 0x5A};
 
 // Ejection timeout management belongs in the MemoryCardFile plugin, except the plugin
 // interface is not yet complete.
@@ -79,21 +89,6 @@ void ClearMcdEjectTimeoutNow()
 	}
 }
 
-// SIO Inline'd IRQs : Calls the SIO interrupt handlers directly instead of
-// feeding them through the IOP's branch test. (see SIO.H for details)
-
-#ifdef SIO_INLINE_IRQS
-#define SIO_INT() sioInterrupt()
-#define SIO_FORCEINLINE __fi
-#else
-__fi void SIO_INT()
-{
-	if( !(psxRegs.interrupt & (1<<IopEvt_SIO)) )
-		PSX_INT(IopEvt_SIO, 64 ); // PSXCLK/250000);
-}
-#define SIO_FORCEINLINE __fi
-#endif
-
 // Currently only check if pad wants mtap to be active.
 // Could lets PCSX2 have its own options, if anyone ever
 // wants to add support for using the extra memcard slots.
@@ -132,12 +127,32 @@ void sioInit()
 	sio.packetsize = 0;
 }
 
-void SIO_FORCEINLINE sioInterrupt()
-{
-	PAD_LOG("Sio Interrupt");
-	sio.StatReg|= IRQ;
-	iopIntcIrq(7); //Should this be used instead of the one below?
-	//psxHu32(0x1070)|=0x80;
+bool isR3000ATest = false;
+
+// Check the active game's type, and fire the matching interrupt.
+// The 3rd bit of the HW_IFCG register lets us know if PSX mode is active. 1 = PSX, 0 = PS2
+// Note that the R3000A's call to interrupts only calls the PS2 based (lack of) delays.
+SIO_FORCEINLINE void sioInterrupt() {
+	if ((psxHu32(HW_ICFG) & (1 << 3)) && !isR3000ATest) {
+		if (!(psxRegs.interrupt & (1 << IopEvt_SIO)))
+			PSX_INT(IopEvt_SIO, 64); // PSXCLK/250000);
+	} else {
+		PAD_LOG("Sio Interrupt");
+		sio.StatReg |= IRQ;
+		iopIntcIrq(7); //Should this be used instead of the one below?
+		//psxHu32(0x1070)|=0x80;
+	}
+
+	isR3000ATest = false;
+}
+
+// An offhand way for the R3000A to access the sioInterrupt function.
+// Following the design of the old preprocessor system, the R3000A should
+// never call the PSX delays (oddly enough), and only the PS2. So we need
+// an extra layer here to help control that.
+__fi void sioInterruptR() {
+	isR3000ATest = true;
+	sioInterrupt();
 }
 
 SIO_WRITE sioWriteStart(u8 data)
@@ -165,7 +180,7 @@ SIO_WRITE sioWriteStart(u8 data)
 	case 0x81: siomode = SIO_MEMCARD; break;
 
 	default:
-		DevCon.Warning("%s cmd: %02X??\n", __FUNCTION__, data);
+		DevCon.Warning("%s cmd: %02X??", __FUNCTION__, data);
 		DEVICE_UNPLUGGED();
 		siomode = SIO_DUMMY;
 		break;
@@ -199,10 +214,23 @@ SIO_WRITE sioWriteController(u8 data)
 
 	default:
 		sio.buf[sio.bufCount] = PADpoll(data);
+
+#ifndef DISABLE_RECORDING
+		if (g_Conf->EmuOptions.EnableRecordingTools)
+		{
+			g_InputRecording.ControllerInterrupt(data, sio.port, sio.bufCount, sio.buf);
+			if (g_InputRecording.IsInterruptFrame())
+			{
+				g_RecordingInput.ControllerInterrupt(data, sio.port, sio.bufCount, sio.buf);
+			}
+
+			PadData::LogPadData(sio.port, sio.bufCount, sio.buf);
+		}
+#endif
 		break;
 	}
 	//Console.WriteLn( "SIO: sent = %02X  From pad data =  %02X  bufCnt %08X ", data, sio.buf[sio.bufCount], sio.bufCount);
-	SIO_INT(); //Don't all commands(transfers) cause an interrupt?
+	sioInterrupt(); //Don't all commands(transfers) cause an interrupt?
 }
 
 SIO_WRITE sioWriteMultitap(u8 data)
@@ -251,7 +279,7 @@ SIO_WRITE sioWriteMultitap(u8 data)
 			break;
 
 		default:
-			DevCon.Warning("%s cmd: %02X??\n", __FUNCTION__, data);
+			DevCon.Warning("%s cmd: %02X??", __FUNCTION__, data);
 			sio.buf[3] = 0x00;
 			sio.buf[4] = 0x00;
 			sio.buf[5] = 0x00;
@@ -290,7 +318,7 @@ SIO_WRITE sioWriteMultitap(u8 data)
 	//default: sio.buf[sio.bufCount] = 0x00; break;
 	}
 
-	SIO_INT();
+	sioInterrupt();
 }
 
 SIO_WRITE MemcardResponse()
@@ -358,14 +386,14 @@ SIO_WRITE memcardErase(u8 data)
 				break;
 
 			default:
-				DevCon.Warning("%s cmd: %02X??\n", __FUNCTION__, data);
+				DevCon.Warning("%s cmd: %02X??", __FUNCTION__, data);
 				sio.bufCount = -1;
 				//sio.bufSize = 3;
 				//sio.bufCount = 4;
 				break;
 			}
 		}
-		SIO_INT();
+		sioInterrupt();
 		break;
 
 	default:
@@ -419,7 +447,7 @@ SIO_WRITE memcardWrite(u8 data)
 				}
 
 			default:
-				DevCon.Warning("%s cmd: %02X??\n", __FUNCTION__, data);
+				DevCon.Warning("%s cmd: %02X??", __FUNCTION__, data);
 				sio.bufCount = -1;
 				//sio.bufSize = 3;
 				//sio.bufCount = 4;
@@ -427,7 +455,7 @@ SIO_WRITE memcardWrite(u8 data)
 			}
 
 		}
-		SIO_INT();
+		sioInterrupt();
 		break;
 
 	case 2:
@@ -509,14 +537,14 @@ SIO_WRITE memcardRead(u8 data)
 				}
 
 			default:
-				DevCon.Warning("%s cmd: %02X??\n", __FUNCTION__, data);
+				DevCon.Warning("%s cmd: %02X??", __FUNCTION__, data);
 				sio.bufCount = -1;
 				//sio.bufSize = 3;
 				//sio.bufCount = 4;
 				break;
 			}
 		}
-		SIO_INT();
+		sioInterrupt();
 		break;
 
 	case 2:
@@ -629,7 +657,7 @@ SIO_WRITE sioWriteMemcard(u8 data)
 	case 0:
 		SIO_STAT_READY();
 		memcardInit();
-		SIO_INT();
+		sioInterrupt();
 		break;
 
 	case 1:
@@ -679,6 +707,7 @@ SIO_WRITE sioWriteMemcard(u8 data)
 		case 0x52: // PSX 'R'ead
 		case 0x53: // PSX 'S'tate
 		case 0x57: // PSX 'W'rite
+		case 0x58: // PSX Pocketstation
 			siomode = SIO_DUMMY;
 			break;
 
@@ -689,6 +718,7 @@ SIO_WRITE sioWriteMemcard(u8 data)
 		case 0x11: // On Boot/Probe
 		case 0x12: // On Write/Delete/Recheck?
 			sio2.packet.recvVal3 = 0x8C;
+			// Fall through
 
 		case 0x81: // Checked right after copy/delete
 		case 0xBF: // Wtf?? On game booting?
@@ -699,11 +729,11 @@ SIO_WRITE sioWriteMemcard(u8 data)
 			break;
 
 		default:
-			DevCon.Warning("%s cmd: %02X??\n", __FUNCTION__, data);
+			DevCon.Warning("%s cmd: %02X??", __FUNCTION__, data);
 			siomode = SIO_DUMMY;
 			break;
 		}
-		SIO_INT();
+		sioInterrupt();
 		break;
 
 	case 2:
@@ -725,7 +755,7 @@ SIO_WRITE sioWriteMemcardPSX(u8 data)
 	case 0: // Same init stuff...
 		SIO_STAT_READY();
 		memcardInit();
-		SIO_INT();
+		sioInterrupt();
 		break;
 
 	case 1:
@@ -740,23 +770,25 @@ SIO_WRITE sioWriteMemcardPSX(u8 data)
 
 		case 0x52: // PSX 'R'ead / Probe
 		case 0x57: // PSX 'W'rite
+		case 0x58: // POCKETSTATION!! Grrrr // Lots of love to the PS2DEV/ps2sdk
 			sio.buf[1] = 0x00; //mcd->FLAG;
 			sio.buf[2] = 0x5A; // probe end, success "0x5A"
 			sio.buf[3] = 0x5D;
 			sio.buf[4] = 0x00;
 			break;
-
-		case 0x58: // POCKETSTATION!! Grrrr // Lots of love to the PS2DEV/ps2sdk
-			DEVICE_UNPLUGGED(); // Check is for 0x01000 on stat
-			siomode = SIO_DUMMY;
-			break;
+		// Old handing for Pocketstation, effectively discarded the calls.
+		// Keeping it around for reference.
+		//case 0x58: // POCKETSTATION!! Grrrr // Lots of love to the PS2DEV/ps2sdk
+		//	DEVICE_UNPLUGGED(); // Check is for 0x01000 on stat
+		//	siomode = SIO_DUMMY;
+		//	break;
 
 		default:
 			//printf("%s cmd: %02X??\n", __FUNCTION__, data);
 			siomode = SIO_DUMMY;
 			break;
 		}
-		SIO_INT();
+		sioInterrupt();
 		break;
 
 	case 2: break;
@@ -831,7 +863,7 @@ SIO_WRITE sioWriteInfraRed(u8 data)
 	SIO_STAT_READY();
 	DEVICE_PLUGGED();
 	siomode = SIO_DUMMY;
-	SIO_INT();
+	sioInterrupt();
 }
 
 //This bit-field in the STATUS register contains the (inveted) state of the /ACK linre from the Controller / MC.
@@ -856,12 +888,12 @@ SIO_WRITE sioWriteInfraRed(u8 data)
 void chkTriggerInt() {
 	//Conditions for triggerring an interrupt.
 	//this is not correct, but ... it can be fixed later
-	 SIO_INT(); return;
-	if ((sio.StatReg & IRQ)) { SIO_INT(); return; } //The interrupt flag in the main INTR_STAT reg should go active on multiple occasions. Set it here for now (hack), until the correct mechanism is made.
-	if ((sio.CtrlReg & ACK_INT_EN) && ((sio.StatReg & TX_RDY) || (sio.StatReg & TX_EMPTY))) { SIO_INT(); return; }
-	if ((sio.CtrlReg & ACK_INT_EN) && (sio.StatReg & ACK_INP)) { SIO_INT(); return; }
+	 sioInterrupt(); return;
+	if ((sio.StatReg & IRQ)) { sioInterrupt(); return; } //The interrupt flag in the main INTR_STAT reg should go active on multiple occasions. Set it here for now (hack), until the correct mechanism is made.
+	if ((sio.CtrlReg & ACK_INT_EN) && ((sio.StatReg & TX_RDY) || (sio.StatReg & TX_EMPTY))) { sioInterrupt(); return; }
+	if ((sio.CtrlReg & ACK_INT_EN) && (sio.StatReg & ACK_INP)) { sioInterrupt(); return; }
 	//The following one may be incorrect.
-	//if ((sio.CtrlReg & RX_INT_EN) && ((byteCnt >= (1<< ((sio.CtrlReg & RX_BYTES_INT) >>8))) ? 1:0) ) { SIO_INT(); return; }
+	//if ((sio.CtrlReg & RX_INT_EN) && ((byteCnt >= (1<< ((sio.CtrlReg & RX_BYTES_INT) >>8))) ? 1:0) ) { sioInterrupt(); return; }
 	return;
 }
 
@@ -889,8 +921,8 @@ static void sioWrite8inl(u8 data)
 	if (IS_LAST_BYTE_IN_PACKET != 1) //The following should be set after each byte transfer but the last one.
 		sio.StatReg |= ACK_INP; //Signal that Controller (or MC) has brought the /ACK (Acknowledge) line active low.
 
-		SIO_INT();
-		//chkTriggerInt();
+	sioInterrupt();
+	//chkTriggerInt();
 	//Console.WriteLn( "SIO0 WR DATA COMMON %02X  INT_STAT= %08X  IOPpc= %08X " , data, psxHu32(0x1070), psxRegs.pc);
 	byteCnt++;
 }
@@ -901,11 +933,11 @@ void sioStatRead() {
 
 if (clrAckCnt > 1) {  //This check can probably be removed...
 	sio.StatReg &= ~ACK_INP; //clear (goes inactive) /ACK line.
-//sio.StatReg &= ~TX_RDY;
-//	sio.StatReg &= ~0x200; //irq
-	//if (byteCnt == 1)
-	//	sio.StatReg &= ~RX_RDY;
-clrAckCnt = 0;
+	// sio.StatReg &= ~TX_RDY;
+	// sio.StatReg &= ~0x200; //irq
+	// if (byteCnt == 1)
+	// 	sio.StatReg &= ~RX_RDY;
+	clrAckCnt = 0;
 }
 	//The /ACK line should go active for >2us, in a time window between 12us and 100us after each byte is sent (received by the controller).
 	//If that doesn't happen, the controller is considered missing.

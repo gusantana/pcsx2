@@ -2533,9 +2533,9 @@ void SuperVUCleanupProgram(u32 startpc, int vuindex)
 
 	//VU cycle stealing hack, 3000 cycle maximum so it doesn't get out of hand
 	if (s_TotalVUCycles < 3000)
-		cpuRegs.cycle += s_TotalVUCycles * EmuConfig.Speedhacks.VUCycleSteal;
+		cpuRegs.cycle += s_TotalVUCycles * EmuConfig.Speedhacks.EECycleSkip;
 	else
-		cpuRegs.cycle += 3000 * EmuConfig.Speedhacks.VUCycleSteal;
+		cpuRegs.cycle += 3000 * EmuConfig.Speedhacks.EECycleSkip;
 
 	if ((int)s_writeQ > 0) VU->VI[REG_Q] = VU->q;
 	if ((int)s_writeP > 0)
@@ -4661,9 +4661,6 @@ void recSuperVU1::SetCacheReserve( uint reserveInMegs ) const
 	//microVU0.cacheSize = reserveInMegs * _1mb;
 }
 
-#if 0
-	#include "sVU_Compare.h"
-#else
 void recSuperVU1::Execute(u32 cycles)
 {
 	if ((VU0.VI[REG_VPU_STAT].UL & 0x100) == 0) return;
@@ -4680,4 +4677,3 @@ void recSuperVU1::Clear(u32 Addr, u32 Size)
 {
 	SuperVUClear(Addr, Size, 1);
 }
-#endif

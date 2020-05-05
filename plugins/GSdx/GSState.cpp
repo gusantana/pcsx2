@@ -36,6 +36,7 @@ GSState::GSState()
 	, m_init_read_fifo_supported(false)
 	, m_gsc(NULL)
 	, m_skip(0)
+	, m_skip_offset(0)
 	, m_q(1.0f)
 	, m_texflush(true)
 	, m_vt(this)
@@ -46,12 +47,24 @@ GSState::GSState()
 {
 	// m_nativeres seems to be a hack. Unfortunately it impacts draw call number which make debug painful in the replayer.
 	// Let's keep it disabled to ease debug.
-	m_nativeres = theApp.GetConfigI("upscale_multiplier") == 1 || GLLoader::in_replayer;
-	m_mipmap = theApp.GetConfigI("mipmap");
-	m_NTSC_Saturation = theApp.GetConfigB("NTSC_Saturation");
-	m_userhacks_skipdraw = theApp.GetConfigB("UserHacks") ? theApp.GetConfigI("UserHacks_SkipDraw") : 0;
-	m_userhacks_auto_flush = theApp.GetConfigB("UserHacks") ? theApp.GetConfigB("UserHacks_AutoFlush") : 0;
+	m_nativeres             = theApp.GetConfigI("upscale_multiplier") == 1 || GLLoader::in_replayer;
+	m_mipmap                = theApp.GetConfigI("mipmap");
+	m_NTSC_Saturation       = theApp.GetConfigB("NTSC_Saturation");
 	m_clut_load_before_draw = theApp.GetConfigB("clut_load_before_draw");
+	if (theApp.GetConfigB("UserHacks"))
+	{
+		m_userhacks_auto_flush      = theApp.GetConfigB("UserHacks_AutoFlush");
+		m_userhacks_wildhack        = theApp.GetConfigB("UserHacks_WildHack");
+		m_userhacks_skipdraw        = theApp.GetConfigI("UserHacks_SkipDraw");
+		m_userhacks_skipdraw_offset = theApp.GetConfigI("UserHacks_SkipDraw_Offset");
+	}
+	else
+	{
+		m_userhacks_auto_flush      = false;
+		m_userhacks_wildhack        = false;
+		m_userhacks_skipdraw        = 0;
+		m_userhacks_skipdraw_offset = 0;
+	}
 
 	s_n = 0;
 	s_dump  = theApp.GetConfigB("dump");
@@ -77,7 +90,6 @@ GSState::GSState()
 	//s_saven = 0;
 	//s_savel = 0;
 
-	UserHacks_WildHack = theApp.GetConfigB("UserHacks") ? theApp.GetConfigI("UserHacks_WildHack") : 0;
 	m_crc_hack_level = theApp.GetConfigT<CRCHackLevel>("crc_hack_level");
 	if (m_crc_hack_level == CRCHackLevel::Automatic)
 		m_crc_hack_level = GSUtil::GetRecommendedCRCHackLevel(theApp.GetCurrentRendererType());
@@ -269,7 +281,7 @@ void GSState::ResetHandlers()
 	m_fpGIFPackedRegHandlers[GIF_REG_PRIM] = (GIFPackedRegHandler)(GIFRegHandler)&GSState::GIFRegHandlerPRIM;
 	m_fpGIFPackedRegHandlers[GIF_REG_RGBA] = &GSState::GIFPackedRegHandlerRGBA;
 	m_fpGIFPackedRegHandlers[GIF_REG_STQ] = &GSState::GIFPackedRegHandlerSTQ;
-	m_fpGIFPackedRegHandlers[GIF_REG_UV] = !UserHacks_WildHack ? &GSState::GIFPackedRegHandlerUV : &GSState::GIFPackedRegHandlerUV_Hack;
+	m_fpGIFPackedRegHandlers[GIF_REG_UV] = m_userhacks_wildhack ? &GSState::GIFPackedRegHandlerUV_Hack : &GSState::GIFPackedRegHandlerUV;
 	m_fpGIFPackedRegHandlers[GIF_REG_TEX0_1] = (GIFPackedRegHandler)(GIFRegHandler)&GSState::GIFRegHandlerTEX0<0>;
 	m_fpGIFPackedRegHandlers[GIF_REG_TEX0_2] = (GIFPackedRegHandler)(GIFRegHandler)&GSState::GIFRegHandlerTEX0<1>;
 	m_fpGIFPackedRegHandlers[GIF_REG_CLAMP_1] = (GIFPackedRegHandler)(GIFRegHandler)&GSState::GIFRegHandlerCLAMP<0>;
@@ -318,7 +330,7 @@ void GSState::ResetHandlers()
 	m_fpGIFRegHandlers[GIF_A_D_REG_PRIM] = &GSState::GIFRegHandlerPRIM;
 	m_fpGIFRegHandlers[GIF_A_D_REG_RGBAQ] = &GSState::GIFRegHandlerRGBAQ;
 	m_fpGIFRegHandlers[GIF_A_D_REG_ST] = &GSState::GIFRegHandlerST;
-	m_fpGIFRegHandlers[GIF_A_D_REG_UV] = !UserHacks_WildHack ? &GSState::GIFRegHandlerUV : &GSState::GIFRegHandlerUV_Hack;
+	m_fpGIFRegHandlers[GIF_A_D_REG_UV] = m_userhacks_wildhack ? &GSState::GIFRegHandlerUV_Hack : &GSState::GIFRegHandlerUV;
 	m_fpGIFRegHandlers[GIF_A_D_REG_TEX0_1] = &GSState::GIFRegHandlerTEX0<0>;
 	m_fpGIFRegHandlers[GIF_A_D_REG_TEX0_2] = &GSState::GIFRegHandlerTEX0<1>;
 	m_fpGIFRegHandlers[GIF_A_D_REG_CLAMP_1] = &GSState::GIFRegHandlerCLAMP<0>;
@@ -623,7 +635,7 @@ void GSState::GIFPackedRegHandlerUV_Hack(const GIFPackedReg* RESTRICT r)
 
 	m_v.UV = (uint32)GSVector4i::store(v.ps32(v));
 
-    isPackedUV_HackFlag = true;
+	m_isPackedUV_HackFlag = true;
 }
 
 template<uint32 prim, uint32 adc, bool auto_flush>
@@ -830,14 +842,14 @@ void GSState::GIFRegHandlerST(const GIFReg* RESTRICT r)
 
 void GSState::GIFRegHandlerUV(const GIFReg* RESTRICT r)
 {
-    m_v.UV = r->UV.u32[0] & 0x3fff3fff;
+	m_v.UV = r->UV.u32[0] & 0x3fff3fff;
 }
 
 void GSState::GIFRegHandlerUV_Hack(const GIFReg* RESTRICT r)
 {
-    m_v.UV = r->UV.u32[0] & 0x3fff3fff;
+	m_v.UV = r->UV.u32[0] & 0x3fff3fff;
 
-    isPackedUV_HackFlag = false;
+	m_isPackedUV_HackFlag = false;
 }
 
 template<uint32 prim, uint32 adc, bool auto_flush>
@@ -1553,7 +1565,7 @@ void GSState::FlushWrite()
 	*/
 /*
 	static int n = 0;
-	string s;
+	std::string s;
 	s = format("c:\\temp1\\[%04d]_%05x_%d_%d_%d_%d_%d_%d.bmp",
 		n++, (int)m_env.BITBLTBUF.DBP, (int)m_env.BITBLTBUF.DBW, (int)m_env.BITBLTBUF.DPSM,
 		r.left, r.top, r.right, r.bottom);
@@ -1639,6 +1651,8 @@ void GSState::FlushPrim()
 		{
 			m_vt.Update(m_vertex.buff, m_index.buff, m_vertex.tail, m_index.tail, GSUtil::GetPrimClass(PRIM->PRIM));
 
+			m_context->SaveReg();
+
 			try {
 				Draw();
 			} catch (GSDXRecoverableError&) {
@@ -1648,6 +1662,8 @@ void GSState::FlushPrim()
 				PurgePool();
 				fprintf(stderr, "GSDX OUT OF MEMORY\n");
 			}
+
+			m_context->RestoreReg();
 
 			m_perfmon.Put(GSPerfMon::Draw, 1);
 			m_perfmon.Put(GSPerfMon::Prim, m_index.tail / GSUtil::GetVertexCount(PRIM->PRIM));
@@ -1750,7 +1766,7 @@ void GSState::Write(const uint8* mem, int len)
 
 		/*
 		static int n = 0;
-		string s;
+		std::string s;
 		s = format("c:\\temp1\\[%04d]_%05x_%d_%d_%d_%d_%d_%d.bmp",
 			n++, (int)blit.DBP, (int)blit.DBW, (int)blit.DPSM,
 			r.left, r.top, r.right, r.bottom);
@@ -1831,7 +1847,7 @@ void GSState::Read(uint8* mem, int len)
 	m_mem.ReadImageX(m_tr.x, m_tr.y, mem, len, m_env.BITBLTBUF, m_env.TRXPOS, m_env.TRXREG);
 
 	if(s_dump && s_save && s_n >= s_saven) {
-		string s= m_dump_root + format("%05d_read_%05x_%d_%d_%d_%d_%d_%d.bmp",
+		std::string s = m_dump_root + format("%05d_read_%05x_%d_%d_%d_%d_%d_%d.bmp",
 				s_n, (int)m_env.BITBLTBUF.SBP, (int)m_env.BITBLTBUF.SBW, (int)m_env.BITBLTBUF.SPSM,
 				r.left, r.top, r.right, r.bottom);
 		m_mem.SaveBMP(s, m_env.BITBLTBUF.SBP, m_env.BITBLTBUF.SBW, m_env.BITBLTBUF.SPSM, r.right, r.bottom);
@@ -2250,7 +2266,7 @@ template<int index> void GSState::Transfer(const uint8* mem, uint32 size)
 			case GIF_FLG_IMAGE:
 
 				{
-					int len = (int)min(size, path.nloop);
+					int len = (int)std::min(size, path.nloop);
 
 					//ASSERT(!(len&3));
 
@@ -2964,8 +2980,8 @@ void GSState::GetTextureMinMax(GSVector4i& r, const GIFRegTEX0& TEX0, const GIFR
 			// This commented code cannot be used directly because it needs uv before the intersection
 			/*if (uv_.x >> tw == uv_.z >> tw)
 			{
-				vr.x = max(vr.x, (uv_.x & ((1 << tw) - 1)));
-				vr.z = min(vr.z, (uv_.z & ((1 << tw) - 1)) + 1);
+				vr.x = std::max(vr.x, (uv_.x & ((1 << tw) - 1)));
+				vr.z = std::min(vr.z, (uv_.z & ((1 << tw) - 1)) + 1);
 			}*/
 			if(mask & 0x000f) {if(vr.x < u.x) vr.x = u.x; if(vr.z > u.z + 1) vr.z = u.z + 1;}
 			break;
@@ -3057,8 +3073,8 @@ void GSState::GetAlphaMinMax()
 			a.w = env.TEXA.TA0;
 			break;
 		case 2:
-			a.y = env.TEXA.AEM ? 0 : min(env.TEXA.TA0, env.TEXA.TA1);
-			a.w = max(env.TEXA.TA0, env.TEXA.TA1);
+			a.y = env.TEXA.AEM ? 0 : std::min(env.TEXA.TA0, env.TEXA.TA1);
+			a.w = std::max(env.TEXA.TA0, env.TEXA.TA1);
 			break;
 		case 3:
 			m_mem.m_clut.GetAlphaMinMax32(a.y, a.w);

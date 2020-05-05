@@ -1,26 +1,24 @@
 language: cpp
 
 sudo: required
-dist: trusty
 
 cache: ccache
 
+dist: xenial
+
 matrix:
   include:
-    - env: VERSION=6 BITS=32
+    - env: VERSION=8 BITS=64
       compiler: gcc
       os: linux
-    - env: VERSION=5 BITS=32
+    - env: VERSION=8 BITS=32
       compiler: gcc
       os: linux
-    - env: VERSION=4.9 BITS=32
+    - env: VERSION=7 BITS=32
       compiler: gcc
       os: linux
     - env: VERSION=3.8 BITS=32
       compiler: clang
-      os: linux
-    - env: VERSION=4.9 BITS=64
-      compiler: gcc
       os: linux
 
 before_install:

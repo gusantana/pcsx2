@@ -63,7 +63,7 @@ void psxReset()
 	g_iopNextEventCycle = psxRegs.cycle + 4;
 
 	psxHwReset();
-
+	PSXCLK = 36864000;
 	ioman::reset();
 	psxBiosReset();
 }
@@ -172,9 +172,8 @@ static __fi void _psxTestInterrupts()
 	IopTestEvent(IopEvt_SIF0,		sif0Interrupt);	// SIF0
 	IopTestEvent(IopEvt_SIF1,		sif1Interrupt);	// SIF1
 	IopTestEvent(IopEvt_SIF2,		sif2Interrupt);	// SIF2
-#ifndef SIO_INLINE_IRQS
-	IopTestEvent(IopEvt_SIO,		sioInterrupt);
-#endif
+	// Originally controlled by a preprocessor define, now PSX dependent.
+	if (psxHu32(HW_ICFG) & (1 << 3)) IopTestEvent(IopEvt_SIO, sioInterruptR);
 	IopTestEvent(IopEvt_CdvdRead,	cdvdReadInterrupt);
 
 	// Profile-guided Optimization (sorta)

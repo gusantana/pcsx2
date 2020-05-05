@@ -174,7 +174,6 @@ _GSgetTitleInfo2   GSgetTitleInfo2;
 _GSmakeSnapshot	   GSmakeSnapshot;
 _GSmakeSnapshot2   GSmakeSnapshot2;
 _GSirqCallback 	   GSirqCallback;
-_GSprintf      	   GSprintf;
 _GSsetBaseMem		GSsetBaseMem;
 _GSsetGameCRC		GSsetGameCRC;
 _GSsetFrameSkip		GSsetFrameSkip;
@@ -192,17 +191,6 @@ static void CALLBACK GS_setFrameSkip(int frameskip) {}
 static void CALLBACK GS_setVsync(int enabled) {}
 static void CALLBACK GS_setExclusive(int isExcl) {}
 static void CALLBACK GS_changeSaveState( int, const char* filename ) {}
-static void CALLBACK GS_printf(int timeout, char *fmt, ...)
-{
-	va_list list;
-	char msg[512];
-
-	va_start(list, fmt);
-	vsprintf(msg, fmt, list);
-	va_end(list);
-
-	Console.WriteLn(msg);
-}
 
 void CALLBACK GS_getTitleInfo2( char* dest, size_t length )
 {
@@ -295,11 +283,7 @@ _SPU2open          SPU2open;
 _SPU2write         SPU2write;
 _SPU2reset         SPU2reset;
 _SPU2read          SPU2read;
-#ifdef ENABLE_NEW_IOPDMA_SPU2
-_SPU2dmaRead	   SPU2dmaRead;
-_SPU2dmaWrite      SPU2dmaWrite;
-_SPU2dmaInterrupt  SPU2dmaInterrupt;
-#else
+
 _SPU2readDMA4Mem   SPU2readDMA4Mem;
 _SPU2writeDMA4Mem  SPU2writeDMA4Mem;
 _SPU2interruptDMA4 SPU2interruptDMA4;
@@ -307,9 +291,9 @@ _SPU2readDMA7Mem   SPU2readDMA7Mem;
 _SPU2writeDMA7Mem  SPU2writeDMA7Mem;
 _SPU2setDMABaseAddr SPU2setDMABaseAddr;
 _SPU2interruptDMA7 SPU2interruptDMA7;
+
 _SPU2ReadMemAddr   SPU2ReadMemAddr;
 _SPU2WriteMemAddr   SPU2WriteMemAddr;
-#endif
 _SPU2setupRecording SPU2setupRecording;
 _SPU2irqCallback   SPU2irqCallback;
 
@@ -327,14 +311,10 @@ _DEV9read32        DEV9read32;
 _DEV9write8        DEV9write8;
 _DEV9write16       DEV9write16;
 _DEV9write32       DEV9write32;
-#ifdef ENABLE_NEW_IOPDMA_DEV9
-_DEV9dmaRead       DEV9dmaRead;
-_DEV9dmaWrite      DEV9dmaWrite;
-_DEV9dmaInterrupt  DEV9dmaInterrupt;
-#else
+
 _DEV9readDMA8Mem   DEV9readDMA8Mem;
 _DEV9writeDMA8Mem  DEV9writeDMA8Mem;
-#endif
+
 _DEV9irqCallback   DEV9irqCallback;
 _DEV9irqHandler    DEV9irqHandler;
 _DEV9async         DEV9async;
@@ -410,7 +390,6 @@ static const LegacyApi_ReqMethod s_MethMessReq_GS[] =
 
 	{	"GSmakeSnapshot",	(vMeth**)&GSmakeSnapshot,	(vMeth*)GS_makeSnapshot },
 	{	"GSirqCallback",	(vMeth**)&GSirqCallback,	(vMeth*)GS_irqCallback },
-	{	"GSprintf",			(vMeth**)&GSprintf,			(vMeth*)GS_printf },
 	{	"GSsetBaseMem",		(vMeth**)&GSsetBaseMem,		NULL	},
 	{	"GSwriteCSR",		(vMeth**)&GSwriteCSR,		NULL	},
 	{	"GSsetGameCRC",		(vMeth**)&GSsetGameCRC,		(vMeth*)GS_setGameCRC },
@@ -473,7 +452,8 @@ static const LegacyApi_OptMethod s_MethMessOpt_PAD[] =
 // ----------------------------------------------------------------------------
 void CALLBACK CDVD_newDiskCB(void (*callback)()) {}
 
-extern int lastReadSize, lastLSN;
+extern int lastReadSize;
+extern u32 lastLSN;
 static s32 CALLBACK CDVD_getBuffer2(u8* buffer)
 {
 	// TEMP: until I fix all the plugins to use this function style
@@ -596,11 +576,6 @@ static const LegacyApi_ReqMethod s_MethMessReq_SPU2[] =
 	{	"SPU2reset",			(vMeth**)&SPU2reset,		SPU2_Reset },
 	{	"SPU2write",			(vMeth**)&SPU2write,		NULL },
 	{	"SPU2read",				(vMeth**)&SPU2read,			NULL },
-#ifdef ENABLE_NEW_IOPDMA_SPU2
-	{	"SPU2dmaRead",			(vMeth**)&SPU2dmaRead,		NULL },
-	{	"SPU2dmaWrite",			(vMeth**)&SPU2dmaWrite,		NULL },
-	{	"SPU2dmaInterrupt",		(vMeth**)&SPU2dmaInterrupt, NULL },
-#else
 	{	"SPU2readDMA4Mem",		(vMeth**)&SPU2readDMA4Mem,	NULL },
 	{	"SPU2readDMA7Mem",		(vMeth**)&SPU2readDMA7Mem,	NULL },
 	{	"SPU2writeDMA4Mem",		(vMeth**)&SPU2writeDMA4Mem,	NULL },
@@ -608,7 +583,6 @@ static const LegacyApi_ReqMethod s_MethMessReq_SPU2[] =
 	{	"SPU2interruptDMA4",	(vMeth**)&SPU2interruptDMA4,NULL },
 	{	"SPU2interruptDMA7",	(vMeth**)&SPU2interruptDMA7,NULL },
 	{	"SPU2ReadMemAddr",		(vMeth**)&SPU2ReadMemAddr,	NULL },
-#endif
 	{	"SPU2irqCallback",		(vMeth**)&SPU2irqCallback,	NULL },
 
 	{ NULL }
@@ -618,10 +592,8 @@ static const LegacyApi_OptMethod s_MethMessOpt_SPU2[] =
 {
 	{	"SPU2setClockPtr",		(vMeth**)&SPU2setClockPtr	},
 	{	"SPU2async",			(vMeth**)&SPU2async			},
-#ifndef ENABLE_NEW_IOPDMA_SPU2
 	{	"SPU2WriteMemAddr",		(vMeth**)&SPU2WriteMemAddr	},
 	{	"SPU2setDMABaseAddr",	(vMeth**)&SPU2setDMABaseAddr},
-#endif
 	{	"SPU2setupRecording",	(vMeth**)&SPU2setupRecording},
 
 	{ NULL }
@@ -639,14 +611,8 @@ static const LegacyApi_ReqMethod s_MethMessReq_DEV9[] =
 	{	"DEV9write8",		(vMeth**)&DEV9write8,		NULL },
 	{	"DEV9write16",		(vMeth**)&DEV9write16,		NULL },
 	{	"DEV9write32",		(vMeth**)&DEV9write32,		NULL },
-#ifdef ENABLE_NEW_IOPDMA_DEV9
-	{	"DEV9dmaRead",		(vMeth**)&DEV9dmaRead,	NULL },
-	{	"DEV9dmaWrite",		(vMeth**)&DEV9dmaWrite,	NULL },
-	{	"DEV9dmaInterrupt",	(vMeth**)&DEV9dmaInterrupt,	NULL },
-#else
 	{	"DEV9readDMA8Mem",	(vMeth**)&DEV9readDMA8Mem,	NULL },
 	{	"DEV9writeDMA8Mem",	(vMeth**)&DEV9writeDMA8Mem,	NULL },
-#endif
 	{	"DEV9irqCallback",	(vMeth**)&DEV9irqCallback,	NULL },
 	{	"DEV9irqHandler",	(vMeth**)&DEV9irqHandler,	NULL },
 
@@ -1255,12 +1221,8 @@ bool SysCorePlugins::OpenPlugin_SPU2()
 {
 	if( SPU2open((void*)pDsp) ) return false;
 
-#ifdef ENABLE_NEW_IOPDMA_SPU2
-	SPU2irqCallback( spu2Irq );
-#else
 	SPU2irqCallback( spu2Irq, spu2DMA4Irq, spu2DMA7Irq );
 	if( SPU2setDMABaseAddr != NULL ) SPU2setDMABaseAddr((uptr)iopMem->Main);
-#endif
 	if( SPU2setClockPtr != NULL ) SPU2setClockPtr(&psxRegs.cycle);
 	return true;
 }
@@ -1745,10 +1707,8 @@ void SysCorePlugins::SendSettingsFolder()
 	ScopedLock lock( m_mtx_PluginStatus );
 	if( m_SettingsFolder.IsEmpty() ) return;
 
-	wxCharBuffer buffer(m_SettingsFolder.mb_str(wxConvFile));
-
 	const PluginInfo* pi = tbl_PluginInfo; do {
-		if( m_info[pi->id] ) m_info[pi->id]->CommonBindings.SetSettingsDir( buffer );
+		if( m_info[pi->id] ) m_info[pi->id]->CommonBindings.SetSettingsDir( m_SettingsFolder.utf8_str() );
 	} while( ++pi, pi->shortname != NULL );
 }
 
@@ -1771,10 +1731,8 @@ void SysCorePlugins::SendLogFolder()
 	ScopedLock lock( m_mtx_PluginStatus );
 	if( m_LogFolder.IsEmpty() ) return;
 
-	wxCharBuffer buffer(m_LogFolder.mb_str(wxConvFile));
-
 	const PluginInfo* pi = tbl_PluginInfo; do {
-		if( m_info[pi->id] ) m_info[pi->id]->CommonBindings.SetLogDir( buffer );
+		if( m_info[pi->id] ) m_info[pi->id]->CommonBindings.SetLogDir( m_LogFolder.utf8_str() );
 	} while( ++pi, pi->shortname != NULL );
 }
 

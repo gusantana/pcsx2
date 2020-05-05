@@ -40,7 +40,7 @@ track tracks[100];
 int curDiskType;
 int curTrayStatus;
 
-int csector;
+static u32 csector;
 int cmode;
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -110,7 +110,7 @@ bool weAreInNewDiskCB = false;
 
 std::unique_ptr<IOCtlSrc> src;
 
-extern CacheRequest g_last_sector_block;
+extern u32 g_last_sector_block_lsn;
 
 ///////////////////////////////////////////////////////////////////////////////
 // keepAliveThread throws a read event regularly to prevent drive spin down  //
@@ -126,10 +126,10 @@ void keepAliveThread()
                                     []() { return !s_keepalive_is_open; })) {
 
         //printf(" * keepAliveThread: polling drive.\n");
-        if (g_last_sector_block.mode == CDVD_MODE_2048)
-            src->ReadSectors2048(g_last_sector_block.lsn, 1, throwaway);
+        if (src->GetMediaType() >= 0)
+            src->ReadSectors2048(g_last_sector_block_lsn, 1, throwaway);
         else
-            src->ReadSectors2352(g_last_sector_block.lsn, 1, throwaway);
+            src->ReadSectors2352(g_last_sector_block_lsn, 1, throwaway);
     }
 
     printf(" * CDVD: KeepAlive thread finished.\n");
@@ -252,7 +252,9 @@ EXPORT s32 CALLBACK CDVDreadTrack(u32 lsn, int mode)
         return ret;
     }
 
-    return lsn < src->GetSectorCount() ? cdvdRequestSector(lsn, mode) : -1;
+    cdvdRequestSector(lsn, mode);
+
+    return 0;
 }
 
 // return can be NULL (for async modes)
@@ -269,6 +271,13 @@ EXPORT u8 *CALLBACK CDVDgetBuffer()
 // return can be NULL (for async modes)
 EXPORT int CALLBACK CDVDgetBuffer2(u8 *dest)
 {
+    // Do nothing for out of bounds disc sector reads. It prevents some games
+    // from hanging (All-Star Baseball 2005, Hello Kitty: Roller Rescue,
+    // Hot Wheels: Beat That! (NTSC), Ratchet & Clank 3 (PAL),
+    // Test Drive: Eve of Destruction, etc.).
+    if (csector >= src->GetSectorCount())
+        return 0;
+
     int csize = 2352;
     switch (cmode) {
         case CDVD_MODE_2048:
@@ -306,7 +315,7 @@ EXPORT s32 CALLBACK CDVDreadSubQ(u32 lsn, cdvdSubQ *subq)
     lsn_to_msf(&subq->discM, &subq->discS, &subq->discF, lsn + 150);
 
     u8 i = strack;
-    while (i < etrack && lsn < tracks[i + 1].start_lba)
+    while (i < etrack && lsn >= tracks[i + 1].start_lba)
         ++i;
 
     lsn -= tracks[i].start_lba;

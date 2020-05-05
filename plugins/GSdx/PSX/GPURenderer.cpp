@@ -25,7 +25,7 @@
 
 #ifdef _WIN32
 
-map<HWND, GPURenderer*> GPURenderer::m_wnd2gpu;
+std::map<HWND, GPURenderer*> GPURenderer::m_wnd2gpu;
 
 #endif
 
@@ -183,7 +183,7 @@ void GPURenderer::VSync()
 		int w = r.width() << m_scale.x;
 		int h = r.height() << m_scale.y;
 
-		string s = format(
+		std::string s = format(
 			"%lld | %d x %d | %.2f fps (%d%%) | %d/%d | %d%% CPU | %.2f | %.2f",
 			m_perfmon.GetFrame(), w, h, fps, (int)(100.0 * fps / m_env.GetFPS()),
 			(int)m_perfmon.Get(GSPerfMon::Prim),
@@ -208,7 +208,7 @@ void GPURenderer::VSync()
 	m_dev->Present(r.fit(m_aspectratio), 0);
 }
 
-bool GPURenderer::MakeSnapshot(const string& path)
+bool GPURenderer::MakeSnapshot(const std::string& path)
 {
 	time_t t = time(NULL);
 
@@ -231,7 +231,7 @@ bool GPURenderer::MakeSnapshot(const string& path)
 
 LRESULT CALLBACK GPURenderer::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
-	map<HWND, GPURenderer*>::iterator i = m_wnd2gpu.find(hWnd);
+	auto i = m_wnd2gpu.find(hWnd);
 
 	if(i != m_wnd2gpu.end())
 	{
@@ -251,18 +251,23 @@ LRESULT GPURenderer::OnMessage(UINT message, WPARAM wParam, LPARAM lParam)
 		{
 		case VK_DELETE:
 			m_filter = (m_filter + 1) % 3;
+			theApp.SetConfig("filter", m_filter);
 			return 0;
 		case VK_END:
 			m_dither = m_dither ? 0 : 1;
+			theApp.SetConfig("dithering", m_dither);
 			return 0;
 		case VK_NEXT:
 			m_aspectratio = (m_aspectratio + 1) % 3;
+			theApp.SetConfig("AspectRatio", m_aspectratio);
 			return 0;
 		case VK_PRIOR:
 			m_fxaa = !m_fxaa;
+			theApp.SetConfig("fxaa", m_fxaa);
 			return 0;
 		case VK_HOME:
 			m_shaderfx = !m_shaderfx;
+			theApp.SetConfig("shaderfx", m_shaderfx);
 			return 0;
 		}
 	}
